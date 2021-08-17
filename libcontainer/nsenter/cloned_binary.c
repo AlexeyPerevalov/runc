@@ -49,6 +49,7 @@
 #include <fcntl.h>
 #include <errno.h>
 
+#include <sys/capability.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
@@ -541,6 +542,7 @@ int ensure_cloned_binary(void)
 {
 	int execfd;
 	char **argv = NULL;
+	int ret;
 
 	/* Check that we're not self-cloned, and if we are then bail. */
 	int cloned = is_self_cloned();
@@ -556,6 +558,20 @@ int ensure_cloned_binary(void)
 
 	if (putenv(CLONED_BINARY_ENV "=1"))
 		goto error;
+
+	cap_t cap_d = cap_get_proc();
+	cap_iab_t iab = cap_iab_init();
+	ret = cap_iab_fill(iab, CAP_IAB_AMB, cap_d, CAP_EFFECTIVE);
+	if (ret < 0) {
+		perror("can't fil ambient capability\n");
+		goto error;
+	}
+
+	ret = cap_iab_set_proc(iab);
+	if (ret < 0 ) {
+		perror("can't set ambient capability\n");
+		goto error;
+	}
 
 	fexecve(execfd, argv, environ);
 error:
