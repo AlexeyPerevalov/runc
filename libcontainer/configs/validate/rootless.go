@@ -14,11 +14,13 @@ func (v *ConfigValidator) rootlessEUID(config *configs.Config) error {
 	if !config.RootlessEUID {
 		return nil
 	}
-	if err := rootlessEUIDMappings(config); err != nil {
-		return err
-	}
-	if err := rootlessEUIDMount(config); err != nil {
-		return err
+	if config.Namespaces.Contains(configs.NEWUSER) {
+		if err := rootlessEUIDMappings(config); err != nil {
+			return err
+		}
+		if err := rootlessEUIDMount(config); err != nil {
+			return err
+		}
 	}
 
 	// XXX: We currently can't verify the user config at all, because
@@ -38,10 +40,6 @@ func hasIDMapping(id int, mappings []configs.IDMap) bool {
 }
 
 func rootlessEUIDMappings(config *configs.Config) error {
-	if !config.Namespaces.Contains(configs.NEWUSER) {
-		return errors.New("rootless container requires user namespaces")
-	}
-
 	if len(config.UidMappings) == 0 {
 		return errors.New("rootless containers requires at least one UID mapping")
 	}
