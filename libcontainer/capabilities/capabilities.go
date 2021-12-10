@@ -69,6 +69,8 @@ func New(capConfig *configs.Capabilities) (*Caps, error) {
 	if err = c.pid.Load(); err != nil {
 		return nil, err
 	}
+
+	logrus.Infof("caps: %s", c.pid.String())
 	if len(unknownCaps) > 0 {
 		logrus.Warn("ignoring unknown or unavailable capabilities: ", mapKeys(unknownCaps))
 	}

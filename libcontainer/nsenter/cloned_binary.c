@@ -538,7 +538,7 @@ error:
 /* Get cheap access to the environment. */
 extern char **environ;
 
-int ensure_cloned_binary(void)
+int ensure_cloned_binary(const char *caps)
 {
 	int execfd;
 	char **argv = NULL;
@@ -560,6 +560,10 @@ int ensure_cloned_binary(void)
 		goto error;
 
 	cap_t cap_d = cap_get_proc();
+	if (caps != NULL) {
+		cap_t newcap = cap_from_text(caps);
+		cap_set_fd(execfd, newcap);
+	}
 	cap_iab_t iab = cap_iab_init();
 	ret = cap_iab_fill(iab, CAP_IAB_AMB, cap_d, CAP_EFFECTIVE);
 	if (ret < 0) {

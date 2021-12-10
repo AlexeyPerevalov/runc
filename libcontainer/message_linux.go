@@ -24,6 +24,7 @@ const (
 	MountSourcesAttr uint16 = 27290
 	UserUIDAttr      uint16 = 27291
 	UserGIDAttr      uint16 = 27292
+	CapabilitiesAttr uint16 = 27293
 )
 
 type Int32msg struct {

@@ -2239,6 +2239,25 @@ func (c *linuxContainer) bootstrapData(cloneFlags uintptr, nsMaps map[configs.Na
 		})
 	}
 
+	// Write capabilitis as uniion of effective and permitted
+	if c.config.Capabilities != nil {
+		var caps []string
+		permmap := make(map[string]struct{})
+		for _, p := range c.config.Capabilities.Permitted {
+			permmap[p] = struct{}{}
+		}
+
+		for _, e := range c.config.Capabilities.Effective {
+			if _, ok := permmap[e]; ok {
+				caps = append(caps, e)
+			}
+		}
+		r.AddData(&Bytemsg{
+			Type:  CapabilitiesAttr,
+			Value: []byte(strings.Join(caps, ",") + "=ep"),
+		})
+	}
+
 	return bytes.NewReader(r.Serialize()), nil
 }
 
