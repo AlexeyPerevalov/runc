@@ -2239,6 +2239,21 @@ func (c *linuxContainer) bootstrapData(cloneFlags uintptr, nsMaps map[configs.Na
 		})
 	}
 
+	// Write capabilitis as uniion of effective and permitted
+	if c.config.Capabilities {
+		var caps []string
+
+		for _, e := range c.config.Capabilities.Effective {
+			if c.config.Capabilities.Permitted.Contains(e) {
+				caps = append(caps, e)
+			}
+		}
+		r.AddData(&Bytemsg{
+			Type:  CapabilitiesAttr,
+			Value: []bytes(strings.Join(caps, ",")),
+		})
+	}
+
 	return bytes.NewReader(r.Serialize()), nil
 }
 

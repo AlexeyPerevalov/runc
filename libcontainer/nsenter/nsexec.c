@@ -92,6 +92,8 @@ struct nlconfig_t {
 	size_t gidmappath_len;
 	uint32_t uid;
 	uint32_t gid;
+	char *capabilities;
+	size_t capabilities_len;
 
 	/* Mount sources opened outside the container userns. */
 	char *mountsources;
@@ -132,6 +134,7 @@ static int loglevel = DEBUG;
 #define MOUNT_SOURCES_ATTR	27290
 #define UID_ATTR                27291
 #define GID_ATTR                27292
+#define CAP_ATTR                27293
 
 /*
  * Use the raw syscall for versions of glibc which don't include a function for
@@ -570,6 +573,10 @@ static void nl_parse(int fd, struct nlconfig_t *config)
 
 		case GID_ATTR:
 			config->gid = readint32(current);
+			break;
+		case CAP_ATTR:
+			config->capabilities = current;
+			config->capabilities_len = payload_len;
 			break;
 		default:
 			bail("unknown netlink message type %d", nlattr->nla_type);
