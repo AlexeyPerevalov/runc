@@ -14,6 +14,7 @@ require (
 	github.com/mrunalp/fileutils v0.5.0
 	github.com/opencontainers/runtime-spec/specs-go v0.0.0
 	github.com/opencontainers/selinux v1.10.0
+	github.com/pkg/errors v0.9.1
 	github.com/seccomp/libseccomp-golang v0.9.2-0.20210429002308-3879420cc921
 	github.com/sirupsen/logrus v1.8.1
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635

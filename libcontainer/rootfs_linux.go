@@ -1,6 +1,7 @@
 package libcontainer
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -23,8 +24,11 @@ import (
 	"github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux/label"
+	pkgerrors "github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
+
+	"encoding/json"
 )
 
 const defaultMountFlags = unix.MS_NOEXEC | unix.MS_NOSUID | unix.MS_NODEV
@@ -69,6 +73,7 @@ func prepareRootfs(pipe io.ReadWriter, iConfig *initConfig, mountFds []int) (err
 		cgroupns:        config.Namespaces.Contains(configs.NEWCGROUP),
 	}
 	setupDev := needsSetupDev(config)
+	time.Sleep(30 * time.Second)
 	for i, m := range config.Mounts {
 		for _, precmd := range m.PremountCmds {
 			if err := mountCmd(precmd); err != nil {
@@ -403,6 +408,9 @@ func mountToRootfs(m *configs.Mount, c *mountConfig) error {
 		return err
 	}
 
+	if mountFd != nil {
+		logrus.Infof("mountFd: %d", *mountFd)
+	}
 	switch m.Device {
 	case "proc", "sysfs":
 		// If the destination already exists and is not a directory, we bail
@@ -493,7 +501,7 @@ func mountToRootfs(m *configs.Mount, c *mountConfig) error {
 		}
 		return mountPropagate(m, rootfs, mountLabel, mountFd)
 	}
-	if err := setRecAttr(m, rootfs); err != nil {
+	if err := setMountAttr(m, rootfs, dest); err != nil {
 		return err
 	}
 	return nil
@@ -1107,6 +1115,8 @@ func mountPropagate(m *configs.Mount, rootfs string, mountLabel string, mountFd 
 	}
 
 	if err := utils.WithProcfd(rootfs, m.Destination, func(procfd string) error {
+
+		logrus.Infof("source: %s, mount %v, procfd: %d", source, m.Destination, procfd)
 		return mount(source, m.Destination, procfd, m.Device, uintptr(flags), data)
 	}); err != nil {
 		return err
@@ -1127,11 +1137,79 @@ func mountPropagate(m *configs.Mount, rootfs string, mountLabel string, mountFd 
 	return nil
 }
 
-func setRecAttr(m *configs.Mount, rootfs string) error {
-	if m.RecAttr == nil {
-		return nil
+func setMountAttr(m *configs.Mount, rootfs, dest string) error {
+	logrus.Infof("m.RecAttr: %v, dest: %s", m.RecAttr, dest)
+	if m.RecAttr != nil {
+		err := utils.WithProcfd(rootfs, m.Destination, func(procfd string) error {
+			return unix.MountSetattr(-1, procfd, unix.AT_RECURSIVE, m.RecAttr)
+		})
+
+		if err != nil {
+			return pkgerrors.Wrapf(err, "MountSetattr failed, AT_RECURSIVE")
+		}
 	}
-	return utils.WithProcfd(rootfs, m.Destination, func(procfd string) error {
-		return unix.MountSetattr(-1, procfd, unix.AT_RECURSIVE, m.RecAttr)
-	})
+
+	mJson, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	logrus.Infof("m %v", string(mJson))
+	if m.Device == "bind" && utils.CleanPath(m.Destination) != "/sys" {
+		/* read /proc/self/ns/ */
+		// O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY
+		//tmpDir, err := os.Open("/proc/self/ns/")
+		//if err != nil {
+		//logrus.Infof("%v", err)
+		//}
+
+		//dirList, _ := tmpDir.ReadDir(0)
+		//for _, e := range dirList {
+		//logrus.Infof("%v", e)
+		//}
+
+		// trace uid_map
+		uidMap, err := os.Open("/proc/self/uid_map")
+		if err != nil {
+			logrus.Infof("%v", err)
+		}
+		defer uidMap.Close()
+		scanner := bufio.NewScanner(uidMap)
+		for scanner.Scan() {
+			logrus.Infof("%v", scanner.Text())
+		}
+
+		var attr unix.MountAttr
+
+		attr.Attr_set = unix.MOUNT_ATTR_IDMAP
+		attr.Attr_clr = 0
+		attr.Propagation = 0
+
+		userNSPath := "/proc/self/ns/user"
+
+		nsUserLink, err := os.Readlink(userNSPath)
+		logrus.Infof("%v, %v", nsUserLink, err)
+
+		userNsFile, err := os.Open(userNSPath)
+		if err != nil {
+			return pkgerrors.Wrapf(err, "Unable to get user ns file descriptor for - %s", userNSPath)
+		}
+
+		attr.Userns_fd = uint64(userNsFile.Fd())
+
+		defer userNsFile.Close()
+		//targetDir, err := os.Open(dest)
+		targetDir, err := os.Open(m.Source)
+
+		if err != nil {
+			return pkgerrors.Wrapf(err, "Unable to get mount point of Mount.Destination - %s", m.Destination)
+		}
+
+		defer targetDir.Close()
+		//time.Sleep(60 * time.Second)
+		err = unix.MountSetattr(int(targetDir.Fd()), "", unix.AT_EMPTY_PATH|unix.AT_RECURSIVE, &attr)
+		if err != nil {
+			return pkgerrors.Wrapf(err, "MountSetAttr has failed idmapping - %s", m.Destination)
+		}
+	}
+	return nil
 }

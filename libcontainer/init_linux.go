@@ -97,6 +97,7 @@ func newContainerInit(t initType, pipe *os.File, consoleSocket *os.File, fifoFd,
 			logFd:         logFd,
 		}, nil
 	case initStandard:
+		logrus.Infof("mountFds: %v", mountFds)
 		return &linuxStandardInit{
 			pipe:          pipe,
 			consoleSocket: consoleSocket,
