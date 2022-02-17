@@ -41,6 +41,9 @@ type Mount struct {
 
 	// Optional Command to be run after Source is mounted.
 	PostmountCmds []Command `json:"postmount_cmds"`
+
+	// UID/GID mapping per mount point
+	IDMappings []IDMap `json:"id_mappings"`
 }
 
 func (m *Mount) IsBind() bool {
