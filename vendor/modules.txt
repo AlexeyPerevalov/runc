@@ -35,7 +35,7 @@ github.com/moby/sys/mountinfo
 # github.com/mrunalp/fileutils v0.5.0
 ## explicit
 github.com/mrunalp/fileutils
-# github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
+# github.com/opencontainers/runtime-spec/specs-go v0.0.0 => ./staging/src/github.com/opencontainers/runtime-spec/specs-go
 ## explicit
 github.com/opencontainers/runtime-spec/specs-go
 # github.com/opencontainers/selinux v1.10.0
@@ -102,3 +102,4 @@ google.golang.org/protobuf/reflect/protoreflect
 google.golang.org/protobuf/reflect/protoregistry
 google.golang.org/protobuf/runtime/protoiface
 google.golang.org/protobuf/runtime/protoimpl
+# github.com/opencontainers/runtime-spec/specs-go => ./staging/src/github.com/opencontainers/runtime-spec/specs-go

@@ -12,7 +12,7 @@ require (
 	github.com/godbus/dbus/v5 v5.0.6
 	github.com/moby/sys/mountinfo v0.5.0
 	github.com/mrunalp/fileutils v0.5.0
-	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
+	github.com/opencontainers/runtime-spec/specs-go v0.0.0
 	github.com/opencontainers/selinux v1.10.0
 	github.com/seccomp/libseccomp-golang v0.9.2-0.20210429002308-3879420cc921
 	github.com/sirupsen/logrus v1.8.1
@@ -24,3 +24,5 @@ require (
 	golang.org/x/sys v0.0.0-20211116061358-0a5406a5449c
 	google.golang.org/protobuf v1.27.1
 )
+
+replace github.com/opencontainers/runtime-spec/specs-go => ./staging/src/github.com/opencontainers/runtime-spec/specs-go
