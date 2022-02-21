@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
@@ -20,6 +21,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer/cgroups/fs2"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/devices"
+	"github.com/opencontainers/runc/libcontainer/user"
 	"github.com/opencontainers/runc/libcontainer/userns"
 	"github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -463,12 +465,25 @@ func mountToRootfs(m *configs.Mount, c *mountConfig) error {
 		}
 		return nil
 	case "bind":
+		err := mountPropagate(m, rootfs, mountLabel, mountFd)
+		if err != nil {
+			return err
+		}
+
 		if err := prepareBindMount(m, rootfs, mountFd); err != nil {
 			return err
 		}
-		if err := mountPropagate(m, rootfs, mountLabel, mountFd); err != nil {
+		var fsmfd int
+		if fsmfd, err = mountFS(m, rootfs, mountLabel, mountFd); err != nil {
 			return err
 		}
+
+		if err := mountIDMapMapped(m, fsmfd); err != nil {
+			return err
+		}
+		//if err := openTree(m, rootfs, mountLabel, mountFd); err != nil {
+		//return err
+		//}
 		// bind mount won't change mount options, we need remount to make mount options effective.
 		// first check that we have non-default options required before attempting a remount
 		if m.Flags&^(unix.MS_REC|unix.MS_REMOUNT|unix.MS_BIND) != 0 {
@@ -501,7 +516,7 @@ func mountToRootfs(m *configs.Mount, c *mountConfig) error {
 		}
 		return mountPropagate(m, rootfs, mountLabel, mountFd)
 	}
-	if err := setMountAttr(m, rootfs, dest); err != nil {
+	if err := setMountAttr(m, rootfs); err != nil {
 		return err
 	}
 	return nil
@@ -1132,13 +1147,201 @@ func mountPropagate(m *configs.Mount, rootfs string, mountLabel string, mountFd 
 		}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("change mount propagation through procfd: %w", err)
+		return fmt.Errorf("change mount propagation through procfd: %v", err)
 	}
 	return nil
 }
 
-func setMountAttr(m *configs.Mount, rootfs, dest string) error {
-	logrus.Infof("m.RecAttr: %v, dest: %s", m.RecAttr, dest)
+func getFSType(source string) (string, error) {
+	file, err := os.OpenFile(source, os.O_RDWR, 0)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close() //nolint: errcheck
+
+	var s unix.Statfs_t
+	if err := unix.Statfs(source, &s); err != nil {
+		return "", &os.PathError{Op: "statfs", Path: source, Err: err}
+	}
+	switch s.Type {
+	case unix.EXT4_SUPER_MAGIC:
+		return "ext4", nil
+	}
+	return "", nil
+}
+
+func mountFS(m *configs.Mount, rootfs string, mountLabel string, mountFd *int) (int, error) {
+	source := m.Source
+	if mountFd != nil {
+		source = "/proc/self/fd/" + strconv.Itoa(*mountFd)
+	}
+	fstype, err := getFSType(source)
+	if err != nil {
+		return -1, err
+	}
+	fsctx, err := fsOpen(fstype, unix.FD_CLOEXEC)
+	if err != nil {
+		return -1, fmt.Errorf("fsopen failed: %v", err)
+	}
+
+	for _, o := range m.Options {
+		opts := strings.Split(o, "=")
+		var k, v string
+		if len(opts) == 0 {
+			continue
+		}
+		k = opts[0]
+		if len(opts) == 1 {
+			v = ""
+		} else {
+			v = opts[1]
+		}
+		err = fsConfig(fsctx, FSCONFIG_SET_STRING, k, v, 0)
+		if err != nil {
+			return -1, fmt.Errorf("fsconfig failed (%s:%s): %v", k, v, err)
+		}
+	}
+	err = fsConfig(fsctx, FSCONFIG_SET_STRING, "source", source, 0)
+	if err != nil {
+		return -1, fmt.Errorf("fsconfig failed for source: %v", err)
+	}
+	err = fsConfig(fsctx, FSCONFIG_CMD_CREATE, "", "", 0)
+
+	if err != nil {
+		return -1, fmt.Errorf("fsConfig failed: %v", err)
+	}
+
+	fsmFd, err := fsMount(fsctx, unix.FD_CLOEXEC, 0)
+
+	if err != nil {
+		return -1, fmt.Errorf("fsMount failed: %v", err)
+	}
+
+	return fsmFd, nil
+}
+
+// TODO: Support multiple mappings in future
+func parseIDMapping(mapping string) ([]syscall.SysProcIDMap, error) {
+	parts := strings.Split(mapping, ":")
+	if len(parts) != 3 {
+		return []syscall.SysProcIDMap{}, errors.New("user namespace mappings require the format `container-id:host-id:size`")
+	}
+	cID, err := strconv.ParseUint(parts[0], 0, 32)
+	if err != nil {
+		return []syscall.SysProcIDMap{}, pkgerrors.Wrapf(err, "invalid container id for user namespace remapping")
+	}
+	hID, err := strconv.ParseUint(parts[1], 0, 32)
+	if err != nil {
+		return []syscall.SysProcIDMap{}, pkgerrors.Wrapf(err, "invalid host id for user namespace remapping")
+	}
+	size, err := strconv.ParseUint(parts[2], 0, 32)
+	if err != nil {
+		return []syscall.SysProcIDMap{}, pkgerrors.Wrapf(err, "invalid size for user namespace remapping")
+	}
+
+	return []syscall.SysProcIDMap{
+		{
+			ContainerID: int(cID),
+			HostID:      int(hID),
+			Size:        int(size),
+		},
+	}, nil
+}
+
+func toLinuxIDMap(mappings []user.IDMap) (configMappings []syscall.SysProcIDMap) {
+	createIDMap := func(m user.IDMap) syscall.SysProcIDMap {
+		return syscall.SysProcIDMap{
+			ContainerID: int(m.ID),
+			HostID:      int(m.ParentID),
+			Size:        int(m.Count),
+		}
+	}
+	for _, m := range mappings {
+		configMappings = append(configMappings, createIDMap(m))
+	}
+	return
+}
+
+func mountIDMapMapped(m *configs.Mount, fsmFd int) error {
+	if m.Device != "bind" || utils.CleanPath(m.Destination) == "/sys" || len(m.IDMaps) == 0 {
+		return nil
+	}
+	mJson, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	logrus.Infof("m %v", string(mJson))
+	const (
+		userNsHelperBinary = "/bin/true"
+	)
+	// trace uid_map
+	uidMap, err := os.Open("/proc/self/uid_map")
+	if err != nil {
+		logrus.Infof("%v", err)
+	}
+	defer uidMap.Close()
+	scanner := bufio.NewScanner(uidMap)
+	for scanner.Scan() {
+		logrus.Infof("%v", scanner.Text())
+	}
+	// end trace
+
+	var attr unix.MountAttr
+
+	attr.Attr_set = unix.MOUNT_ATTR_IDMAP
+	attr.Attr_clr = 0
+	attr.Propagation = 0
+
+	// TODO: this was given from containerd/containerd
+	// https://github.com/containerd/containerd/pull/5890
+	// this code requese generalization
+	// TODO: Avoid dependency on /bin/true or do in a completely different way
+	// Currently there is no way to pass idmapping directly to mount_setattr,
+	// this is not very convenient from the container runtime point of view.
+	// The id remapping procedure should be done in containerd, due to we have
+	// old approach that use recursive chown.
+	// Maybe it is necessary to think about moving of container rootfs ownership
+	// adjustment to runc due to runc has information about container user namespace.
+	// But personally I think that it would be better to add possibility to call
+	// mount_setattr with explicit id mappings and leave container runtime components
+	// responsibilities unchanged.
+	cmd := exec.Command(userNsHelperBinary)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUSER,
+	}
+
+	cmd.SysProcAttr.UidMappings = toLinuxIDMap(m.IDMaps)
+	cmd.SysProcAttr.GidMappings = cmd.SysProcAttr.UidMappings
+
+	if err = cmd.Start(); err != nil {
+		return pkgerrors.Wrapf(err, "Failed to run the %s helper binary", userNsHelperBinary)
+	}
+
+	defer func() {
+		if waitErr := cmd.Wait(); waitErr != nil {
+			err = pkgerrors.Wrapf(waitErr, "Failed to run the %s helper binary", userNsHelperBinary)
+		}
+	}()
+
+	path := fmt.Sprintf("/proc/%d/ns/user", cmd.Process.Pid)
+	var userNsFile *os.File
+	if userNsFile, err = os.Open(path); err != nil {
+		return pkgerrors.Wrapf(err, "Unable to get user ns file descriptor for - %s", path)
+	}
+	defer userNsFile.Close()
+
+	attr.Userns_fd = uint64(userNsFile.Fd())
+
+	//time.Sleep(60 * time.Second)
+	err = unix.MountSetattr(fsmFd, "", unix.AT_EMPTY_PATH|unix.AT_RECURSIVE, &attr)
+	if err != nil {
+		return pkgerrors.Wrapf(err, "MountSetAttr has failed idmapping - %s", m.Destination)
+	}
+	return nil
+}
+
+func setMountAttr(m *configs.Mount, rootfs string) error {
+	logrus.Infof("m.RecAttr: %v, dest: %s", m.RecAttr)
 	if m.RecAttr != nil {
 		err := utils.WithProcfd(rootfs, m.Destination, func(procfd string) error {
 			return unix.MountSetattr(-1, procfd, unix.AT_RECURSIVE, m.RecAttr)
@@ -1149,67 +1352,5 @@ func setMountAttr(m *configs.Mount, rootfs, dest string) error {
 		}
 	}
 
-	mJson, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	logrus.Infof("m %v", string(mJson))
-	if m.Device == "bind" && utils.CleanPath(m.Destination) != "/sys" {
-		/* read /proc/self/ns/ */
-		// O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY
-		//tmpDir, err := os.Open("/proc/self/ns/")
-		//if err != nil {
-		//logrus.Infof("%v", err)
-		//}
-
-		//dirList, _ := tmpDir.ReadDir(0)
-		//for _, e := range dirList {
-		//logrus.Infof("%v", e)
-		//}
-
-		// trace uid_map
-		uidMap, err := os.Open("/proc/self/uid_map")
-		if err != nil {
-			logrus.Infof("%v", err)
-		}
-		defer uidMap.Close()
-		scanner := bufio.NewScanner(uidMap)
-		for scanner.Scan() {
-			logrus.Infof("%v", scanner.Text())
-		}
-
-		var attr unix.MountAttr
-
-		attr.Attr_set = unix.MOUNT_ATTR_IDMAP
-		attr.Attr_clr = 0
-		attr.Propagation = 0
-
-		userNSPath := "/proc/self/ns/user"
-
-		nsUserLink, err := os.Readlink(userNSPath)
-		logrus.Infof("%v, %v", nsUserLink, err)
-
-		userNsFile, err := os.Open(userNSPath)
-		if err != nil {
-			return pkgerrors.Wrapf(err, "Unable to get user ns file descriptor for - %s", userNSPath)
-		}
-
-		attr.Userns_fd = uint64(userNsFile.Fd())
-
-		defer userNsFile.Close()
-		//targetDir, err := os.Open(dest)
-		targetDir, err := os.Open(m.Source)
-
-		if err != nil {
-			return pkgerrors.Wrapf(err, "Unable to get mount point of Mount.Destination - %s", m.Destination)
-		}
-
-		defer targetDir.Close()
-		//time.Sleep(60 * time.Second)
-		err = unix.MountSetattr(int(targetDir.Fd()), "", unix.AT_EMPTY_PATH|unix.AT_RECURSIVE, &attr)
-		if err != nil {
-			return pkgerrors.Wrapf(err, "MountSetAttr has failed idmapping - %s", m.Destination)
-		}
-	}
 	return nil
 }

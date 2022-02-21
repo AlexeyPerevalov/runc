@@ -1,6 +1,10 @@
 package configs
 
-import "golang.org/x/sys/unix"
+import (
+	"golang.org/x/sys/unix"
+
+	"github.com/opencontainers/runc/libcontainer/user"
+)
 
 const (
 	// EXT_COPYUP is a directive to copy up the contents of a directory when
@@ -26,6 +30,8 @@ type Mount struct {
 
 	// Mount data applied to the mount.
 	Data string `json:"data"`
+	// Options are fstab style mount options. From specs.Mount.Options
+	Options []string
 
 	// Relabel source if set, "z" indicates shared, "Z" indicates unshared.
 	Relabel string `json:"relabel"`
@@ -42,8 +48,8 @@ type Mount struct {
 	// Optional Command to be run after Source is mounted.
 	PostmountCmds []Command `json:"postmount_cmds"`
 
-	// UID/GID mapping per mount point
-	IDMappings []IDMap `json:"id_mappings"`
+	// mapping per mount point
+	IDMaps []user.IDMap `json:"id_maps"`
 }
 
 func (m *Mount) IsBind() bool {
