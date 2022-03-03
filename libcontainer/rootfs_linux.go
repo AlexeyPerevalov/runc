@@ -75,7 +75,7 @@ func prepareRootfs(pipe io.ReadWriter, iConfig *initConfig, mountFds []int) (err
 		cgroupns:        config.Namespaces.Contains(configs.NEWCGROUP),
 	}
 	setupDev := needsSetupDev(config)
-	time.Sleep(30 * time.Second)
+	//time.Sleep(30 * time.Second)
 	for i, m := range config.Mounts {
 		for _, precmd := range m.PremountCmds {
 			if err := mountCmd(precmd); err != nil {
@@ -1220,6 +1220,7 @@ func mountFS(m *configs.Mount, rootfs string, mountLabel string, mountFd *int) (
 		return -1, fmt.Errorf("fsConfig failed: %v", err)
 	}
 
+	logrus.Infof("all configs are applied")
 	fsmFd, err := fsMount(fsctx, unix.FD_CLOEXEC, 0)
 
 	if err != nil {
