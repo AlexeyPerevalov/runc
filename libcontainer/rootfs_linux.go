@@ -465,25 +465,26 @@ func mountToRootfs(m *configs.Mount, c *mountConfig) error {
 		}
 		return nil
 	case "bind":
+		logrus.Infof("bind")
 		err := mountPropagate(m, rootfs, mountLabel, mountFd)
 		if err != nil {
 			return err
 		}
 
+		logrus.Infof("perpareBindMount")
 		if err := prepareBindMount(m, rootfs, mountFd); err != nil {
 			return err
 		}
 		var fsmfd int
+		logrus.Infof("mountFS")
 		if fsmfd, err = mountFS(m, rootfs, mountLabel, mountFd); err != nil {
 			return err
 		}
 
+		logrus.Infof("mountIDMapMapped")
 		if err := mountIDMapMapped(m, fsmfd); err != nil {
 			return err
 		}
-		//if err := openTree(m, rootfs, mountLabel, mountFd); err != nil {
-		//return err
-		//}
 		// bind mount won't change mount options, we need remount to make mount options effective.
 		// first check that we have non-default options required before attempting a remount
 		if m.Flags&^(unix.MS_REC|unix.MS_REMOUNT|unix.MS_BIND) != 0 {
@@ -1153,32 +1154,40 @@ func mountPropagate(m *configs.Mount, rootfs string, mountLabel string, mountFd 
 }
 
 func getFSType(source string) (string, error) {
-	file, err := os.OpenFile(source, os.O_RDWR, 0)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close() //nolint: errcheck
-
 	var s unix.Statfs_t
 	if err := unix.Statfs(source, &s); err != nil {
 		return "", &os.PathError{Op: "statfs", Path: source, Err: err}
 	}
+
+	mJson, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	logrus.Infof("s.Type %v", string(mJson))
 	switch s.Type {
 	case unix.EXT4_SUPER_MAGIC:
 		return "ext4", nil
+	case unix.SYSFS_MAGIC:
+		return "sysfs", nil
 	}
 	return "", nil
 }
 
 func mountFS(m *configs.Mount, rootfs string, mountLabel string, mountFd *int) (int, error) {
 	source := m.Source
+
+	logrus.Infof("source %v", source)
 	if mountFd != nil {
 		source = "/proc/self/fd/" + strconv.Itoa(*mountFd)
 	}
 	fstype, err := getFSType(source)
+
 	if err != nil {
 		return -1, err
 	}
+
+	logrus.Infof("fstype %v, %v: %d\n", fstype, err, os.Getpid())
+	//time.Sleep(60 * time.Second)
 	fsctx, err := fsOpen(fstype, unix.FD_CLOEXEC)
 	if err != nil {
 		return -1, fmt.Errorf("fsopen failed: %v", err)
